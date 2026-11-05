@@ -1,0 +1,10 @@
+--find-links "${USERPROFILE}/Documents/DEV/QT/qt-wheels"
+PySide6==6.12.0a1.dev1793859141
+PySide6-Essentials==6.12.0a1.dev1793859141
+PySide6-Addons==6.12.0a1.dev1793859141
+shiboken6==6.12.0a1.dev1793859141
+pystray==0.19.5
+pillow==13.0.0
+watchdog==7.0.0
+cryptography==50.0.2
+pyinstaller==6.22.3

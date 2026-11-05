@@ -1,0 +1,24 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# PyInstaller
+build/
+dist/
+
+# Icon written by packaging/build.ps1
+assets/*.ico
+
+# Local scratch shares used while trying sync
+folder_tests/
+
+# Editor and OS
+.idea/
+.vs/
+*.log
+Thumbs.db
