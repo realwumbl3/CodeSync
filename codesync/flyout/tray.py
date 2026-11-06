@@ -18,6 +18,38 @@ _last_hover = 0.0
 _last_click = 0.0
 
 
+def _install_win32_icon_size_hook() -> None:
+    """pystray loads the large system icon and the tray scales it down, which eats the arrowheads."""
+    try:
+        import ctypes
+
+        from pystray._util import serialized_image
+        from pystray._util import win32
+        from pystray._win32 import Icon as Win32Icon
+    except (ImportError, AttributeError):
+        return
+    if getattr(Win32Icon, "_codesync_icon_size_patched", False):
+        return
+
+    def _assert_icon_handle(self) -> None:
+        if self._icon_handle:
+            return
+        small_x = ctypes.windll.user32.GetSystemMetrics(49) or 16  # SM_CXSMICON
+        small_y = ctypes.windll.user32.GetSystemMetrics(50) or 16  # SM_CYSMICON
+        with serialized_image(self.icon, "ICO") as icon_path:
+            self._icon_handle = win32.LoadImage(
+                None,
+                icon_path,
+                win32.IMAGE_ICON,
+                small_x,
+                small_y,
+                win32.LR_LOADFROMFILE,
+            )
+
+    Win32Icon._assert_icon_handle = _assert_icon_handle
+    Win32Icon._codesync_icon_size_patched = True
+
+
 def _install_win32_notify_hook() -> None:
     try:
         from pystray._win32 import Icon as Win32Icon
@@ -59,6 +91,7 @@ class TrayIcon(threading.Thread):
     def __init__(self, *, on_toggle, on_secondary_click, on_hover) -> None:
         super().__init__(name="codesync-tray", daemon=True)
         self._on_toggle = on_toggle
+        _install_win32_icon_size_hook()
         _install_win32_notify_hook()
         self._icon = pystray.Icon(
             APP_DISPLAY_NAME,

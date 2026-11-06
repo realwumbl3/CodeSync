@@ -49,6 +49,17 @@ DEFAULT_PORT = 47331
 _PEER_HOLD_S = 5.0
 
 
+def arm_keepalive(sock: socket.socket) -> None:
+    """Ask the OS to probe a peer that vanished without closing (sleep, Wi-Fi drop)."""
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        if hasattr(socket, "SIO_KEEPALIVE_VALS"):
+            # enable, idle ms, interval ms
+            sock.ioctl(socket.SIO_KEEPALIVE_VALS, (1, 15_000, 5_000))
+    except OSError:
+        logger.debug("tcp keepalive unavailable", exc_info=True)
+
+
 def lan_ip() -> str:
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
@@ -403,7 +414,7 @@ class Node:
             share.peer_hold_until = 0.0
             share.connected = False
             return []
-        live = [conn.peer_name or "Connected PC" for conn in share.conns if conn.alive]
+        live = [conn.peer_name or "Connected PC" for conn in self._listed_conns(share)]
         now = time.monotonic()
         if live:
             share.shown_peers = live
@@ -443,10 +454,36 @@ class Node:
         self._consume(share, self._observe_all(share))
         if not share.paused:
             self._start_watcher(share)
+        if self._claim_if_self_hosted(share):
+            share.role = "hub"
+            share.hub_host = self.advertise
+            share.hub_port = self.port
+            with self._lock:
+                self._save_locked()
         if not share.conns:
             self._set_presence(share)
         if share.role == "peer":
             self._spawn(lambda: self._peer_loop(share), f"codesync-peer-{share.id[:6]}")
+
+    def _claim_if_self_hosted(self, share: Share) -> bool:
+        """A peer whose hub address is this listener would dial itself.
+
+        The saved link points at this PC, so this process is the host. An extra
+        folder joined on purpose uses loopback and still dials the local hub.
+        """
+        if share.role != "peer" or share.loopback or share.hub_port != self.port:
+            return False
+        host = (share.hub_host or "").strip().lower().rstrip(".")
+        if host in {"", "127.0.0.1", "localhost", "::1"}:
+            return True
+        return host in {self.advertise.lower(), lan_ip().lower()}
+
+    def _listed_conns(self, share: Share) -> list[_Link]:
+        live = [conn for conn in share.conns if conn.alive]
+        me = machine_key(self.machine_id)
+        if share.role != "hub" or not me:
+            return live
+        return [conn for conn in live if machine_key(conn.peer_id) != me]
 
     def _spawn(self, target, name: str) -> None:
         thread = threading.Thread(target=target, name=name, daemon=True)
@@ -489,6 +526,7 @@ class Node:
     def _connect_peer(self, share: Share) -> None:
         raw = socket.create_connection((share.hub_host, share.hub_port), timeout=8)
         raw.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        arm_keepalive(raw)
         tls = self._client_tls.wrap_socket(raw, server_hostname=share.hub_host)
         try:
             peer = tls.getpeercert(binary_form=True) or b""
@@ -533,6 +571,7 @@ class Node:
             except OSError:
                 break
             client.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            arm_keepalive(client)
             try:
                 tls = self._server_tls.wrap_socket(client, server_side=True)
             except OSError:
@@ -1165,8 +1204,8 @@ class Node:
         return {"type": "manifest", "entries": entries}
 
     def _set_presence(self, share: Share) -> None:
-        count = len(share.conns)
-        share.connected = count > 0
+        count = len(self._listed_conns(share))
+        share.connected = count > 0 or any(conn.alive for conn in share.conns)
         if share.paused:
             share.detail = "Paused"
             return

@@ -174,6 +174,35 @@ class PeerListTests(unittest.TestCase):
             share.conns.clear()
             node.index.close()
 
+    def test_hub_hides_itself_and_a_self_addressed_peer_becomes_the_hub(self) -> None:
+        from types import SimpleNamespace
+
+        from codesync.sync.node import Share
+
+        with tempfile.TemporaryDirectory() as tmp:
+            node = Node(Path(tmp), advertise="10.0.0.242", listen_port=47331, machine_id="local-id", machine_name="CUMPUTER")
+            node.port = 47331
+            share = Share(
+                id="s",
+                token="t",
+                root=Path(tmp),
+                role="peer",
+                hub_host="10.0.0.242",
+                hub_port=47331,
+                name="rogally",
+                key="s",
+            )
+            node.shares["s"] = share
+            self.assertTrue(node._claim_if_self_hosted(share))
+            share.role = "hub"
+            share.conns.append(SimpleNamespace(peer_name="CUMPUTER", peer_id="local-id", alive=True))
+            share.conns.append(SimpleNamespace(peer_name="CUMPUTER", peer_id="local-id", alive=True))
+            share.conns.append(SimpleNamespace(peer_name="ROG-RC71L-Z1X", peer_id="rog-id", alive=True))
+            node._set_presence(share)
+            self.assertEqual(node.view("s")["peers"], ["ROG-RC71L-Z1X"])
+            self.assertEqual(node.view("s")["detail"], "1 connected")
+            node.index.close()
+
 
 if __name__ == "__main__":
     unittest.main()

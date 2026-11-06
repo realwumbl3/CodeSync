@@ -31,13 +31,49 @@ hiddenimports = collect_submodules("codesync")
 hiddenimports += collect_submodules("pystray")
 hiddenimports += [
     "PIL.Image",
-    "PIL.ImageDraw",
-    "PIL.ImageFont",
     "watchdog.observers.read_directory_changes",
     "watchdog.observers.winapi",
 ]
 
-excludes = [
+# Widgets does not link Qt Network. These plugins are the only things that do.
+_DROP_BINARIES = {
+    "qt6network.dll",
+    "qtnetwork.pyd",
+    "qt6websockets.dll",
+    "qtwebsockets.pyd",
+    "qdirect2d.dll",
+    "qminimal.dll",
+    "qoffscreen.dll",
+    "qjpeg.dll",
+    "qgif.dll",
+    "qtuiotouchplugin.dll",
+    "qschannelbackend.dll",
+    "qcertonlybackend.dll",
+    "qnetworklistmanager.dll",
+}
+# Tray icons are PNG and ICO. Pillow only needs the core imaging codec.
+_DROP_PREFIXES = ("_avif.", "_webp.", "_imagingtk.", "_imagingcms.")
+
+def _keep_binary(entry) -> bool:
+    base = os.path.basename(entry[0]).lower()
+    if base in _DROP_BINARIES or base.startswith(_DROP_PREFIXES):
+        return False
+    if base in {
+        "qtvirtualkeyboardplugin.dll",
+        "qt6virtualkeyboard.dll",
+        "qt6quick.dll",
+        "qt6qml.dll",
+        "qt6qmlmeta.dll",
+        "qt6qmlmodels.dll",
+        "qt6qmlworkerscript.dll",
+    }:
+        return False
+    return True
+
+# A tuple so PyInstaller can append "__main__" without rewriting this list.
+# A mutated list never matches the cached Analysis, so every build starts over.
+excludes = (
+    "PySide6.QtNetwork",
     "PySide6.QtWebEngine",
     "PySide6.QtWebEngineCore",
     "PySide6.QtWebEngineWidgets",
@@ -74,34 +110,26 @@ excludes = [
     "PySide6.QtGraphs",
     "PySide6.QtLocation",
     "PySide6.QtNfc",
-]
+    "PIL._avif",
+    "PIL._webp",
+    "PIL._imagingtk",
+    "PIL._imagingcms",
+)
 
 a = Analysis(
     [os.path.join(ROOT, "run.py")],
     pathex=[ROOT],
     binaries=[],
-    datas=[],
+    datas=[(os.path.join(ROOT, "assets", "icon.png"), "assets")],
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
     excludes=excludes,
     noarchive=False,
+    optimize=2,
 )
-# PySide's automatic plugin collection pulls Qt Quick in through the virtual
-# keyboard. CodeSync uses the native Windows input context.
-a.binaries = [
-    entry for entry in a.binaries
-    if os.path.basename(entry[0]).lower() not in {
-        "qtvirtualkeyboardplugin.dll",
-        "qt6virtualkeyboard.dll",
-        "qt6quick.dll",
-        "qt6qml.dll",
-        "qt6qmlmeta.dll",
-        "qt6qmlmodels.dll",
-        "qt6qmlworkerscript.dll",
-    }
-]
+a.binaries = [entry for entry in a.binaries if _keep_binary(entry)]
 a.binaries += _vc_runtime()
 pyz = PYZ(a.pure)
 exe = EXE(
