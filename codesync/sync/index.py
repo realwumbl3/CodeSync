@@ -135,6 +135,12 @@ class Index:
             )
             self._db.commit()
 
+    def forget(self, share_id: str, path: str) -> None:
+        """Stop tracking a path without recording a deletion."""
+        with self._lock:
+            self._db.execute("DELETE FROM files WHERE share_id=? AND path=?", (share_id, path))
+            self._db.commit()
+
     def drop_share(self, share_id: str) -> None:
         with self._lock:
             self._db.execute("DELETE FROM files WHERE share_id=?", (share_id,))

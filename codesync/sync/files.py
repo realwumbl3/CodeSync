@@ -11,6 +11,10 @@ from ctypes import wintypes
 from pathlib import Path
 
 
+# Not the hash of an empty file. A folder record must not be written as one.
+DIRECTORY_HASH = "dir"
+
+
 def hash_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 

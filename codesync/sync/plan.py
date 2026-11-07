@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .files import DIRECTORY_HASH
+
 
 @dataclass(frozen=True)
 class Entry:
@@ -93,6 +95,10 @@ def _collapse_renames(sends: list[Action], remote: dict[str, Entry]) -> list[Act
     used_puts: set[str] = set()
     renames: list[SendRename] = []
     for delete in deletes:
+        # Every folder shares one hash. Pairing a removed folder with a new
+        # one would rename the wrong directory.
+        if delete.hash == DIRECTORY_HASH:
+            continue
         same_deletes = [
             item
             for item in deletes

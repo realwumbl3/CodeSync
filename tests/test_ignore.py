@@ -33,8 +33,13 @@ class IgnoreTests(unittest.TestCase):
         self.assertTrue(ignore.is_ignored("build", True))
         self.assertTrue(ignore.is_ignored("build/out.js", False))
         self.assertFalse(ignore.is_ignored("src/main.py", False))
-        self.assertTrue(ignore.is_ignored(".git", True))
-        self.assertTrue(ignore.is_ignored(".git/HEAD", False))
+        self.assertFalse(ignore.is_ignored(".git", True))
+        self.assertFalse(ignore.is_ignored(".git/HEAD", False))
+        self.assertFalse(ignore.is_ignored("app/.git", True))
+        self.assertFalse(ignore.is_ignored("app/.git/HEAD", False))
+        self.assertFalse(ignore.is_ignored("app/.git/objects/pack/pack-abc.idx", False))
+        self.assertTrue(ignore.is_ignored(".git/index.lock", False))
+        self.assertTrue(ignore.is_ignored("app/.git/objects/pack/tmp_pack_abc", False))
         self.assertTrue(ignore.is_ignored("cache.tmp", False))
         self.assertTrue(ignore.is_ignored("dir/file.codesync-tmp", False))
 
@@ -83,6 +88,19 @@ class IgnoreTests(unittest.TestCase):
         detected, entries = ignore.ignored_listing()
         self.assertTrue(detected)
         self.assertEqual(entries, (("app/foo.o", False),))
+
+    def test_listing_skips_nested_git(self) -> None:
+        app = self.root / "app"
+        (app / ".git").mkdir(parents=True)
+        (app / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+        (app / "main.py").write_text("x\n", encoding="utf-8")
+        ignore = IgnoreIndex(self.root)
+        _detected, entries = ignore.ignored_listing()
+        paths = [path for path, _is_dir in entries]
+        self.assertNotIn("app/.git", paths)
+        self.assertFalse(any(path.startswith("app/.git/") for path in paths))
+        self.assertFalse(ignore.is_ignored("app/.git/HEAD", False))
+        self.assertFalse(ignore.is_ignored("app/main.py", False))
 
     def test_listing_without_rules_is_empty(self) -> None:
         (self.root / ".git").mkdir()

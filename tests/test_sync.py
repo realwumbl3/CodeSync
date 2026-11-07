@@ -1,3 +1,4 @@
+import shutil
 import tempfile
 import time
 import unittest
@@ -51,6 +52,7 @@ class SyncTests(unittest.TestCase):
         (self.folder_a / ".gitignore").write_text("*.log\n", encoding="utf-8")
         (self.folder_a / ".git").mkdir()
         (self.folder_a / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+        (self.folder_a / ".git" / "index.lock").write_text("lock", encoding="utf-8")
         (self.folder_a / "note.log").write_text("local only\n", encoding="utf-8")
         (self.folder_a / "main.py").write_text("print('v1')\n", encoding="utf-8")
         link = self.node_a.create_share(self.folder_a)["link"]
@@ -60,8 +62,13 @@ class SyncTests(unittest.TestCase):
             return (self.folder_b / "main.py").is_file() and (self.folder_b / ".gitignore").is_file()
 
         wait_until(copied)
+        wait_until(lambda: (self.folder_b / ".git" / "HEAD").is_file())
         self.assertFalse((self.folder_b / "note.log").exists())
-        self.assertFalse((self.folder_b / ".git").exists())
+        self.assertEqual(
+            (self.folder_b / ".git" / "HEAD").read_text(encoding="utf-8"),
+            "ref: refs/heads/main\n",
+        )
+        self.assertFalse((self.folder_b / ".git" / "index.lock").exists())
         self.assertEqual((self.folder_b / "main.py").read_text(encoding="utf-8"), "print('v1')\n")
 
         started = time.monotonic()
@@ -99,6 +106,57 @@ class SyncTests(unittest.TestCase):
             if path.name.startswith("app.sync-conflict-") and not path.name.endswith(".codesync-tmp")
         )
         self.assertEqual(conflict.read_text(encoding="utf-8"), "from A\n")
+
+    def test_nested_git_is_copied(self) -> None:
+        repo = self.folder_a / "app"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+        (repo / ".git" / "index.lock").write_text("lock", encoding="utf-8")
+        (repo / "main.py").write_text("print('v1')\n", encoding="utf-8")
+        link = self.node_a.create_share(self.folder_a)["link"]
+        self.node_b.join_share(link, self.folder_b)
+
+        wait_until(lambda: (self.folder_b / "app" / ".git" / "HEAD").is_file())
+        self.assertEqual(
+            (self.folder_b / "app" / ".git" / "HEAD").read_text(encoding="utf-8"),
+            "ref: refs/heads/main\n",
+        )
+        self.assertFalse((self.folder_b / "app" / ".git" / "index.lock").exists())
+        self.assertTrue((repo / ".git" / "HEAD").is_file())
+
+    def test_empty_folders_sync_and_removed_folders_disappear(self) -> None:
+        (self.folder_a / "empty").mkdir()
+        (self.folder_a / "box" / "sub").mkdir(parents=True)
+        (self.folder_a / "box" / "note.txt").write_text("hi\n", encoding="utf-8")
+        link = self.node_a.create_share(self.folder_a)["link"]
+        self.node_b.join_share(link, self.folder_b)
+
+        wait_until(
+            lambda: (self.folder_b / "empty").is_dir()
+            and (self.folder_b / "box" / "sub").is_dir()
+            and (self.folder_b / "box" / "note.txt").is_file()
+        )
+
+        (self.folder_a / "box").rename(self.folder_a / "crate")
+        wait_until(
+            lambda: (self.folder_b / "crate" / "note.txt").is_file()
+            and (self.folder_b / "crate" / "sub").is_dir()
+            and not (self.folder_b / "box").exists()
+        )
+
+        (self.folder_a / "crate" / "note.txt").unlink()
+        (self.folder_a / "tick.txt").write_text("1\n", encoding="utf-8")
+        wait_until(
+            lambda: (self.folder_b / "tick.txt").is_file()
+            and not (self.folder_b / "crate" / "note.txt").exists()
+        )
+        self.assertTrue((self.folder_b / "crate").is_dir())
+        self.assertTrue((self.folder_b / "crate" / "sub").is_dir())
+
+        shutil.rmtree(self.folder_a / "crate")
+        (self.folder_a / "empty").rmdir()
+        wait_until(lambda: not (self.folder_b / "crate").exists() and not (self.folder_b / "empty").exists())
 
 
 class SameProcessTests(unittest.TestCase):
@@ -142,6 +200,53 @@ class SameProcessTests(unittest.TestCase):
             lambda: (self.folder_b / "extra.py").is_file()
             and (self.folder_b / "extra.py").read_text(encoding="utf-8") == "x\n"
         )
+
+    def test_chunked_file_arrives_whole(self) -> None:
+        import codesync.sync.gitfiles as gitfiles
+
+        original = gitfiles.PUT_CHUNK
+        gitfiles.PUT_CHUNK = 4
+        try:
+            (self.folder_a / "blob.bin").write_bytes(b"abcdefghij")
+            link = self.node.create_share(self.folder_a)["link"]
+            self.node.join_share(link, self.folder_b)
+            wait_until(
+                lambda: (self.folder_b / "blob.bin").is_file()
+                and (self.folder_b / "blob.bin").read_bytes() == b"abcdefghij"
+            )
+            self.assertFalse(list(self.folder_b.glob("*.codesync-part")))
+        finally:
+            gitfiles.PUT_CHUNK = original
+
+    def test_pack_index_waits_for_its_pack(self) -> None:
+        from codesync.sync.files import hash_bytes
+
+        repo = self.folder_a / "app" / ".git" / "objects" / "pack"
+        repo.mkdir(parents=True)
+        view = self.node.create_share(self.folder_a)
+        self.node.set_paused(view["id"], True)
+        share = self.node.shares[view["id"]]
+        idx_rel = "app/.git/objects/pack/pack-abc.idx"
+        pack_rel = "app/.git/objects/pack/pack-abc.pack"
+        idx_body = b"idx-bytes"
+        pack_body = b"pack-bytes"
+        self.node._apply_put(
+            share,
+            None,
+            {"path": idx_rel, "hash": hash_bytes(idx_body), "counter": 1, "size": len(idx_body)},
+            idx_body,
+        )
+        self.assertFalse((self.folder_a / idx_rel).is_file())
+        self.assertTrue((self.folder_a / idx_rel).with_name("pack-abc.idx.codesync-hold").is_file())
+        self.node._apply_put(
+            share,
+            None,
+            {"path": pack_rel, "hash": hash_bytes(pack_body), "counter": 1, "size": len(pack_body)},
+            pack_body,
+        )
+        self.assertEqual((self.folder_a / pack_rel).read_bytes(), pack_body)
+        self.assertEqual((self.folder_a / idx_rel).read_bytes(), idx_body)
+        self.assertFalse((self.folder_a / idx_rel).with_name("pack-abc.idx.codesync-hold").exists())
 
 
 class PeerListTests(unittest.TestCase):

@@ -13,6 +13,8 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 
+from .gitfiles import inside_git, is_git_ephemeral
+
 
 @dataclass(frozen=True)
 class Rule:
@@ -108,7 +110,11 @@ def parse_gitignore(text: str, base: str) -> list[Rule]:
 
 
 class IgnoreIndex:
-    """Ignore rules for one share root. ``.git`` is always ignored."""
+    """Ignore rules for one share root.
+
+    ``.git`` is synced. Only Git's lock files and half-written packs are skipped,
+    so a peer receives a repository it can commit and push.
+    """
 
     def __init__(self, root: Path) -> None:
         self.root = root
@@ -186,7 +192,7 @@ class IgnoreIndex:
                     is_dir = entry.is_dir(follow_symlinks=False)
                 except OSError:
                     continue
-                if name == ".git" and not rel_dir:
+                if name == ".git":
                     continue
                 if is_dir:
                     if self.ignored_by_rule(rel, True):
@@ -245,13 +251,20 @@ class IgnoreIndex:
         if not rel:
             return False
         name = rel.rsplit("/", 1)[-1]
-        if rel == ".git" or rel.startswith(".git/") or name.endswith(".codesync-tmp"):
+        if (
+            is_git_ephemeral(rel)
+            or name.endswith(".codesync-tmp")
+            or name.endswith(".codesync-part")
+            or name.endswith(".codesync-hold")
+        ):
             return True
+        if inside_git(rel):
+            return False
         return self.ignored_by_rule(rel, is_dir)
 
     def ignored_by_rule(self, rel: str, is_dir: bool) -> bool:
         rel = rel.replace("\\", "/").strip("/")
-        if not rel or rel == ".git" or rel.startswith(".git/"):
+        if not rel or inside_git(rel):
             return False
         parts = rel.split("/")
         for index, _part in enumerate(parts):

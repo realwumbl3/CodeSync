@@ -109,7 +109,15 @@ def main() -> None:
     # the interpreter, and this handler turns that interrupt into a normal quit.
     signal.signal(signal.SIGINT, lambda *_args: app.quit())
     QTimer.singleShot(200, main_flyout.toggle_focused)
-    log.info("CodeSync listening on %s", node.port)
+    from codesync import __version__
+
+    log.info(
+        "CodeSync %s (%s) listening on %s, log %s",
+        __version__,
+        "exe" if is_frozen() else "source",
+        node.port,
+        home / "codesync.log",
+    )
     app.exec()
     _exit(node)
 
@@ -373,7 +381,7 @@ def _configure_log(home: Path) -> None:
     logging.basicConfig(
         filename=str(home / "codesync.log"),
         level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(message)s",
+        format="%(asctime)s %(levelname)s [%(threadName)s] %(message)s",
     )
 
 
