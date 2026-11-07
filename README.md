@@ -28,12 +28,13 @@ The token is the permission to join. **Stop sharing** removes the share on this 
 
 A share is one folder tree, both ways, for a handful of machines. The case that matters is two.
 
-- Saves, creates, deletes, and renames inside the share are synced.
+- Saves, creates, deletes, and renames inside the share are synced. Empty folders are synced too. A deleted folder is removed on the other machine only after it is empty.
 - The watcher waits about 50 ms after the last change to a path, so an editor’s temp-file-then-rename becomes one update of the final path. A short poll also walks the tree, so a missed watcher event still syncs.
-- Each file is hashed with SHA-256 and sent whole in one message. The receiver checks the hash before it writes. It then writes `name.codesync-tmp` beside the destination and replaces the file. A bad hash leaves the previous file in place. Those temp names are never synced. A single message can carry up to 64 MB.
+- Each file is hashed with SHA-256. The receiver checks the hash before it writes. It then writes `name.codesync-tmp` beside the destination and replaces the file. A bad hash leaves the previous file in place. Those temp names are never synced. A file up to 8 MB goes in one message. A larger file, such as a Git pack, is sent in 8 MB pieces and assembled before the hash check. One message can carry up to 64 MB.
 - A rename is sent as a rename when Windows reports the same file id, or when one path disappears and another appears with the same hash. A directory rename follows the files inside it.
 - Symlinks are left alone.
-- Files matching `.gitignore` or `.git/info/exclude` stay on the machine that has them. Nested ignore files, negation (`!`), and last-match-wins follow the same cutoff Git uses. An ignored directory hides its children. `.git` itself is always left alone, so each machine keeps its own repository metadata. A global `core.excludesFile` is not read.
+- Files matching `.gitignore` or `.git/info/exclude` stay on the machine that has them. Nested ignore files, negation (`!`), and last-match-wins follow the same cutoff Git uses. An ignored directory hides its children. Those rules do not apply inside `.git`. A global `core.excludesFile` is not read.
+- `.git` is synced, including a repository nested inside the share. The other machine receives the objects, refs, and config, so Git there can commit and push to the same remote. The pack file is sent before its index, and the index is written only after the pack is on disk. Git lock files and half-written `tmp_pack_*` files are skipped. Reflogs, `ORIG_HEAD`, and the index are per-machine bookkeeping, so the first sync of two existing repositories often keeps both copies of those files.
 - Changing a `.gitignore` or `.git/info/exclude` re-filters the tree. Newly ignored files are removed from peers. Newly un-ignored files are sent.
 - Nothing CodeSync-specific is written into the project folder. Sync state stays in the CodeSync data folder.
 
@@ -56,7 +57,7 @@ The flyout is a 360 px panel anchored above the taskbar. The header shows the ve
 The folder page shows:
 
 - the local path
-- an ignored-path row when the tree has ignore rules (`1 ignored`, `12 ignored`). Open it to browse the ignored tree. `.git` and `*.codesync-tmp` are not listed
+- an ignored-path row when the tree has ignore rules (`1 ignored`, `12 ignored`). Open it to browse the ignored tree. `.git` and `*.codesync-tmp` are not listed there
 - who is connected, by computer name. A brief disconnect keeps the previous names for a few seconds
 - the link (**Copy**)
 - **Open folder**, **Pause** / **Resume**, **Sync another folder**, and **Stop sharing**
@@ -73,7 +74,7 @@ Hovering the icon shows one line per folder, up to six, while both flyouts are c
 - Python 3.12, to run from source or to build
 - The patched PySide6 build that provides `QWidget.setWindowAnchor`. `requirements.txt` installs it from `%USERPROFILE%\Documents\DEV\QT\qt-wheels`
 
-Peers who only run `CodeSync.exe` do not need Python or Git. The exe is a windowed PyInstaller build and carries the VC++ runtime it needs on a clean PC.
+Peers who only run `CodeSync.exe` do not need Python. The exe is a windowed PyInstaller build and carries the VC++ runtime it needs on a clean PC. Git is not required to sync a repository. It is required on a PC that will commit or push using the synced `.git`.
 
 ## Run from source
 
@@ -135,6 +136,7 @@ codesync/
   flyout/             tray icon, acrylic panel, taskbar placement, pages
   sync/
     ignore.py         gitignore matching
+    gitfiles.py       Git pack order, chunk size, and lock files
     watch.py          directory watcher and 50 ms settle
     index.py          SQLite path records
     plan.py           which side sends, and rename collapsing
